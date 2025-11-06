@@ -1,0 +1,44 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# IDE/Editor settings
+.vscode/
+.idea/
+*.swp
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+
+# Telethon session files
+*.session
+*.session-journal
+*.sqlite3
+*.sqlite3-journal
+
+# Log files
+*.log
+
+# Output, reports, and temp files
+*.out
+*.tmp
+
+# Coverage, test, profiling
+.coverage
+.cache
+.pytest_cache/
+
+# Dependency directories
+*.egg-info/
+dist/
+build/
