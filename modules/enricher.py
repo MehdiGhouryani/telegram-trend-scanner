@@ -1,7 +1,7 @@
 """
 ماژول غنی‌سازی داده‌ها با Failover و تلاش مجدد هوشمند.
 - Birdeye: تلاش مجدد برای خطاهای 429 و 5xx (مانند 521)
-- Dexscreener: تلاش مجدد فقط برای 429
+- Dexscreener: به صورت Hardcode (بدون .env) و فقط تلاش مجدد برای 429
 - لاگ‌نویسی هوشمند با ثبت پاسخ خطا از سرور.
 """
 
@@ -14,10 +14,13 @@ from httpx import ReadTimeout, ConnectError
 logger = logging.getLogger(__name__)
 
 # --- تنظیمات API ---
+# Birdeye همچنان از .env خوانده می‌شود
 BIRDEYE_API = os.getenv("EXTERNAL_API_ENDPOINT")
 BIRDEYE_KEY = os.getenv("EXTERNAL_API_KEY")
-DEX_API = os.getenv("DEX_API_ENDPOINT")
-DEX_KEY = os.getenv("DEX_API_KEY")
+
+# Dexscreener طبق درخواست به صورت Hardcode تعریف می‌شود
+DEX_API = "https://api.dexscreener.com/latest/dex/search"
+DEX_KEY = None  # API جستجوی Dexscreener نیازی به کلید ندارد
 
 # --- تنظیمات تلاش مجدد ---
 REQUEST_TIMEOUT = 15
@@ -97,18 +100,14 @@ async def _query_birdeye(symbol, network, client):
 
 async def _query_dexscreener(symbol, network, client):
     """
-    [اصلاح شده] تماس با Dexscreener API با استفاده از اندپوینت /search
+    [اصلاح شده] تماس با Dexscreener API (با آدرس Hardcode)
     """
-    # اندپوینت /search از 'q' برای جستجو استفاده می‌کند و پارامتر 'chain' ندارد
-    # ما نماد و شبکه را با هم ترکیب می‌کنیم (مثلاً "solana ZEC")
     query = f"{network} {symbol}"
     params = {"q": query}
     headers = {"Authorization": f"Bearer {DEX_KEY}"} if DEX_KEY else {}
     
-    if not DEX_API or "search" not in DEX_API:
-        logger.error("DEX_API_ENDPOINT در .env روی .../search تنظیم نشده است.")
-        return None
-
+    # بررسی .env حذف شد چون آدرس Hardcode است
+    
     try:
         for attempt in range(MAX_RETRIES):
             r = await client.get(
@@ -122,8 +121,6 @@ async def _query_dexscreener(symbol, network, client):
                 json_ = r.json()
                 results = json_.get("pairs", [])
                 if results:
-                    # Dexscreener ممکن است نتایج غیرمرتبط برگرداند
-                    # ما اولین نتیجه‌ای را می‌خواهیم که baseToken.symbol با نماد ما مطابقت دارد
                     target_pair = None
                     for pair in results:
                         if pair.get("baseToken", {}).get("symbol", "").upper() == symbol.upper():
@@ -174,7 +171,6 @@ async def get_contract_address(symbol: str, network: str, http_client: httpx.Asy
     
     logger.debug(f"Birdeye failed for {symbol}-{network}, trying Dexscreener...")
     
-    # تابع _query_dexscreener اصلاح شده است تا به درستی جستجو کند
     addr = await _query_dexscreener(symbol_clean, network_query, http_client)
     if addr:
         return addr
