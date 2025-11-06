@@ -3,23 +3,26 @@ Telegram Trend Scanner Bot
 اسکنر و تحلیلگر خودکار ترند توکن‌های کریپتو از کانال‌های تلگرام
 """
 
+# گام ۱: بارگذاری .env باید قبل از هر ایمپورت دیگری از ماژول‌ها انجام شود
+# تا متغیرهای محیطی برای ماژول enricher در دسترس باشند
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import sys
 import asyncio
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, UTC  # ایمپورت UTC برای رفع خطای زمان
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, ChannelPrivateError
-from dotenv import load_dotenv
 
+# اکنون ماژول‌ها ایمپورت می‌شوند
 from modules.parser import parse_messages
 from modules.analyzer import analyze_frequency
 from modules.enricher import enrich_top_lists
 from modules.formatter import format_output_message
 
-# بارگذاری متغیرهای محیطی
-load_dotenv()
 logger = logging.getLogger(__name__)
 
 LOG_FORMAT = '%(asctime)s | %(levelname)s | %(name)s | %(message)s'
@@ -30,10 +33,8 @@ def setup_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     
-    # فرمتر مشترک
     formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
     
-    # لاگ چرخشی فایل
     try:
         file_handler = RotatingFileHandler(
             "scanner.log", 
@@ -47,12 +48,9 @@ def setup_logging():
     except Exception as e:
         print(f"Error setting up file logger: {e}")
 
-    # لاگ کنسول
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
-
-
 
 def load_config():
     """بارگذاری و اعتبارسنجی تنظیمات از .env"""
@@ -61,16 +59,12 @@ def load_config():
             'API_ID': int(os.getenv("API_ID")),
             'API_HASH': os.getenv("API_HASH"),
             'SESSION_NAME': os.getenv("SESSION_NAME", "trend_scanner"),
-            
-            # رفع خطا: آیدی‌های کانال باید به عنوان عدد (Integer) خوانده شوند
             'SOURCE_CHANNEL_ID': int(os.getenv("SOURCE_CHANNEL_ID")),
             'DEST_CHANNEL_ID': int(os.getenv("DESTINATION_CHANNEL_ID")),
-            
             'LOOP_INTERVAL_SECONDS': int(os.getenv("LOOP_INTERVAL_SECONDS", 1800)),
-            'ADMIN_NOTIFICATIONS': os.getenv("ADMIN_NOTIFICATIONS", "false").lower() == "true"
+            # اعلان ادمین همیشه فعال است و از .env خوانده نمی‌شود
         }
         
-        # API_HASH چون رشته است، باید جداگانه بررسی شود
         if not config['API_HASH']:
             raise ValueError("API_HASH خالی است")
         
@@ -82,22 +76,18 @@ def load_config():
         logger.error("!!! لطفاً مطمئن شوید API_ID, API_HASH, و ID کانال‌ها به درستی در فایل .env وارد شده‌اند.")
         exit(1)
 
-
 async def notify_admin(client, message, config):
     """ارسال پیام وضعیت به ادمین (Saved Messages)"""
-    if not config.get('ADMIN_NOTIFICATIONS'):
-        return
+    # بررسی حذف شد، اعلان همیشه ارسال می‌شود
     try:
         await client.send_message('me', message, parse_mode='md')
     except Exception as e:
         logger.warning(f"Failed to send admin notification: {e}")
 
-
-
 async def process_trends(client, config):
     """پردازش اصلی: دریافت، تحلیل و انتشار ترندها"""
     try:
-        # رفع خطا: استفاده از زمان آگاه از منطقه زمانی (Timezone-Aware)
+        # رفع خطای مقایسه زمان: استفاده از زمان آگاه از منطقه زمانی
         now = datetime.now(UTC)
         since = now - timedelta(seconds=config['LOOP_INTERVAL_SECONDS'])
         
@@ -109,7 +99,6 @@ async def process_trends(client, config):
             config['SOURCE_CHANNEL_ID'],
             limit=200
         ):
-            # اکنون مقایسه به درستی انجام می‌شود
             if msg.date < since:
                 break
             if msg.date >= since and getattr(msg, "text", None):
@@ -167,7 +156,6 @@ async def process_trends(client, config):
         logger.error(f"✗ خطای غیرمنتظره: {e}", exc_info=True)
         await notify_admin(client, f"🆘 خطای غیرمنتظره:\n`{str(e)}`", config)
 
-
 async def main():
     """حلقه اصلی برنامه"""
     setup_logging()
@@ -184,7 +172,7 @@ async def main():
         logger.info("=" * 50)
         logger.info("🤖 ربات اسکنر ترند تلگرام فعال شد")
         logger.info(f"⏱ بازه زمانی اسکن: هر {config['LOOP_INTERVAL_SECONDS']} ثانیه")
-        logger.info(f"🔔 اعلان ادمین: {'فعال' if config['ADMIN_NOTIFICATIONS'] else 'غیرفعال'}")
+        # لاگ اعلان ادمین حذف شد چون اکنون همیشه فعال است
         logger.info("=" * 50)
         await notify_admin(client, "🤖 **ربات اسکنر ترند فعال شد**", config)
         
