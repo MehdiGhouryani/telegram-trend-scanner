@@ -1,7 +1,7 @@
 """
 ماژول فرمت‌دهی پیام خروجی با نمایش سطر خالی بجای آدرس ناموجود، و لاگ هدفمند.
 """
-from datetime import datetime
+from datetime import datetime, UTC
 import logging
 
 logger = logging.getLogger(__name__)
