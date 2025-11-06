@@ -71,7 +71,6 @@ async def _query_birdeye(symbol, network, client):
                 logger.debug(f"BIRDEYE NotFound: {symbol}-{network}")
                 return None
             
-            # منطق تلاش مجدد هوشمند (فقط Birdeye)
             elif r.status_code in BIRDEYE_RETRY_STATUS_CODES:
                 snippet = _get_response_snippet(r.text)
                 logger.warning(
@@ -81,7 +80,6 @@ async def _query_birdeye(symbol, network, client):
                 )
                 await asyncio.sleep(BIRDEYE_RETRY_SLEEP_SECONDS)
             
-            # خطاهای دیگر (مانند 400, 401, 404) که نباید دوباره تلاش شوند
             else:
                 snippet = _get_response_snippet(r.text)
                 logger.warning(
@@ -98,12 +96,17 @@ async def _query_birdeye(symbol, network, client):
     return None
 
 async def _query_dexscreener(symbol, network, client):
-    """تماس با Dexscreener API با Retry Logic فقط برای 429"""
-    params = {"symbol": symbol, "chain": network}
+    """
+    [اصلاح شده] تماس با Dexscreener API با استفاده از اندپوینت /search
+    """
+    # اندپوینت /search از 'q' برای جستجو استفاده می‌کند و پارامتر 'chain' ندارد
+    # ما نماد و شبکه را با هم ترکیب می‌کنیم (مثلاً "solana ZEC")
+    query = f"{network} {symbol}"
+    params = {"q": query}
     headers = {"Authorization": f"Bearer {DEX_KEY}"} if DEX_KEY else {}
     
-    if not DEX_API:
-        logger.error("DEX_API (DEX_API_ENDPOINT) در .env تنظیم نشده است.")
+    if not DEX_API or "search" not in DEX_API:
+        logger.error("DEX_API_ENDPOINT در .env روی .../search تنظیم نشده است.")
         return None
 
     try:
@@ -119,41 +122,43 @@ async def _query_dexscreener(symbol, network, client):
                 json_ = r.json()
                 results = json_.get("pairs", [])
                 if results:
-                    sorted_ = sorted(
-                        results, 
-                        key=lambda x: x.get("volume24hUSD", 0), 
-                        reverse=True
-                    )
-                    addr = sorted_[0].get("baseToken", {}).get("address")
-                    if addr:
-                        logger.info(f"DEXSCREEN OK: {symbol}-{network} -> {addr[:8]}...")
-                        return addr
-                
-                logger.debug(f"DEXSCREEN NotFound: {symbol}-{network}")
+                    # Dexscreener ممکن است نتایج غیرمرتبط برگرداند
+                    # ما اولین نتیجه‌ای را می‌خواهیم که baseToken.symbol با نماد ما مطابقت دارد
+                    target_pair = None
+                    for pair in results:
+                        if pair.get("baseToken", {}).get("symbol", "").upper() == symbol.upper():
+                            target_pair = pair
+                            break
+                    
+                    if target_pair:
+                        addr = target_pair.get("baseToken", {}).get("address")
+                        if addr:
+                            logger.info(f"DEXSCREEN OK: {symbol}-{network} -> {addr[:8]}...")
+                            return addr
+
+                logger.debug(f"DEXSCREEN NotFound: {symbol}-{network} (Query: {query})")
                 return None
 
-            # منطق تلاش مجدد (فقط Dexscreener)
             elif r.status_code == 429:
                 snippet = _get_response_snippet(r.text)
                 logger.warning(
                     f"DEXSCREEN HTTP 429 (Retry {attempt+1}): "
-                    f"{symbol}-{network} | Resp: {snippet} | Waiting 1s..."
+                    f"{query} | Resp: {snippet} | Waiting 1s..."
                 )
                 await asyncio.sleep(1)
             
-            # خطاهای دیگر (404، 5xx و ...)
             else:
                 snippet = _get_response_snippet(r.text)
                 logger.warning(
                     f"DEXSCREEN HTTP {r.status_code} (No Retry): "
-                    f"{symbol}-{network} | Resp: {snippet}"
+                    f"{query} | Resp: {snippet}"
                 )
                 break
                 
     except (ReadTimeout, ConnectError) as e:
-        logger.warning(f"DEXSCREEN NetErr: {symbol}-{network}: {type(e).__name__}")
+        logger.warning(f"DEXSCREEN NetErr: {query}: {type(e).__name__}")
     except Exception as e:
-        logger.error(f"DEXSCREEN UnexpErr: {symbol}-{network}: {e}", exc_info=False)
+        logger.error(f"DEXSCREEN UnexpErr: {query}: {e}", exc_info=False)
         
     return None
 
@@ -167,9 +172,9 @@ async def get_contract_address(symbol: str, network: str, http_client: httpx.Asy
     if addr:
         return addr
     
-    # اگر Birdeye نشد (به هر دلیلی)، سراغ Dexscreener می‌رویم
     logger.debug(f"Birdeye failed for {symbol}-{network}, trying Dexscreener...")
     
+    # تابع _query_dexscreener اصلاح شده است تا به درستی جستجو کند
     addr = await _query_dexscreener(symbol_clean, network_query, http_client)
     if addr:
         return addr
@@ -193,7 +198,7 @@ async def enrich_top_lists(top_sol: list, top_bnb: list) -> tuple[list, list]:
             for i, addr in enumerate(results_sol)
         ]
         
-        await asyncio.sleep(SLEEP_RATE)  # تاخیر کوتاه بین دسته‌های SOL و BNB
+        await asyncio.sleep(SLEEP_RATE)
         
         # --- پردازش BNB ---
         tasks_bnb = []
