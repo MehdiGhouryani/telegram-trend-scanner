@@ -3,8 +3,9 @@ Telegram Trend Scanner Bot
 اسکنر و تحلیلگر خودکار ترند توکن‌های کریپتو از کانال‌های تلگرام
 """
 
-# گام ۱: بارگذاری .env باید قبل از هر ایمپورت دیگری از ماژول‌ها انجام شود
-# تا متغیرهای محیطی برای ماژول enricher در دسترس باشند
+# رفع خطای NoneType:
+# load_dotenv باید قبل از هر ایمپورتی از ماژول‌ها اجرا شود
+# تا متغیرهای محیطی برای modules/enricher.py در دسترس باشند.
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -13,11 +14,11 @@ import sys
 import asyncio
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta, UTC  # ایمپورت UTC برای رفع خطای زمان
+from datetime import datetime, timedelta, UTC
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, ChannelPrivateError
 
-# اکنون ماژول‌ها ایمپورت می‌شوند
+# اکنون ماژول‌ها با اطمینان از بارگذاری .env ایمپورت می‌شوند
 from modules.parser import parse_messages
 from modules.analyzer import analyze_frequency
 from modules.enricher import enrich_top_lists
@@ -52,6 +53,13 @@ def setup_logging():
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
+    # لاگ‌نویسی هوشمند و فشرده:
+    # نادیده گرفتن لاگ‌های INFO از کتابخانه‌های شلوغ
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telethon").setLevel(logging.WARNING)
+    logger.info("لاگ‌نویسی راه‌اندازی شد. لاگ‌های httpx و telethon روی WARNING تنظیم شدند.")
+
+
 def load_config():
     """بارگذاری و اعتبارسنجی تنظیمات از .env"""
     try:
@@ -62,7 +70,6 @@ def load_config():
             'SOURCE_CHANNEL_ID': int(os.getenv("SOURCE_CHANNEL_ID")),
             'DEST_CHANNEL_ID': int(os.getenv("DESTINATION_CHANNEL_ID")),
             'LOOP_INTERVAL_SECONDS': int(os.getenv("LOOP_INTERVAL_SECONDS", 1800)),
-            # اعلان ادمین همیشه فعال است و از .env خوانده نمی‌شود
         }
         
         if not config['API_HASH']:
@@ -77,8 +84,7 @@ def load_config():
         exit(1)
 
 async def notify_admin(client, message, config):
-    """ارسال پیام وضعیت به ادمین (Saved Messages)"""
-    # بررسی حذف شد، اعلان همیشه ارسال می‌شود
+    """ارسال پیام وضعیت به ادمین (Saved Messages) - همیشه فعال"""
     try:
         await client.send_message('me', message, parse_mode='md')
     except Exception as e:
@@ -87,7 +93,6 @@ async def notify_admin(client, message, config):
 async def process_trends(client, config):
     """پردازش اصلی: دریافت، تحلیل و انتشار ترندها"""
     try:
-        # رفع خطای مقایسه زمان: استفاده از زمان آگاه از منطقه زمانی
         now = datetime.now(UTC)
         since = now - timedelta(seconds=config['LOOP_INTERVAL_SECONDS'])
         
@@ -128,20 +133,34 @@ async def process_trends(client, config):
         enriched_sol, enriched_bnb = await enrich_top_lists(top_sol, top_bnb)
         logger.info("✓ غنی‌سازی داده‌ها تکمیل شد")
         
-        final_message = format_output_message(enriched_sol, enriched_bnb)
+        # بازنویسی برای ارسال دو پیام جداگانه
+        sol_message, bnb_message = format_output_message(enriched_sol, enriched_bnb)
         
-        if not final_message:
+        if not sol_message and not bnb_message:
             logger.warning("⚠ پیام خروجی خالی است (داده‌ای برای نمایش نبود)")
             await notify_admin(client, "ℹ️ داده‌ای برای ساخت گزارش نهایی یافت نشد.", config)
             return
         
-        await client.send_message(
-            config['DEST_CHANNEL_ID'],
-            final_message,
-            parse_mode="md"
-        )
-        logger.info("✓ گزارش با موفقیت ارسال شد")
-        await notify_admin(client, "✅ گزارش با موفقیت ارسال شد.", config)
+        # ارسال پیام اول (SOL)
+        if sol_message:
+            await client.send_message(
+                config['DEST_CHANNEL_ID'],
+                sol_message,
+                parse_mode="md"
+            )
+            logger.info("✓ گزارش SOL ارسال شد")
+            await asyncio.sleep(0.5)  # تاخیر کوتاه بین دو پیام
+        
+        # ارسال پیام دوم (BNB)
+        if bnb_message:
+            await client.send_message(
+                config['DEST_CHANNEL_ID'],
+                bnb_message,
+                parse_mode="md"
+            )
+            logger.info("✓ گزارش BNB ارسال شد")
+
+        await notify_admin(client, "✅ گزارش(ها) با موفقیت ارسال شد.", config)
         
     except FloodWaitError as e:
         logger.error(f"✗ محدودیت تلگرام: باید {e.seconds} ثانیه صبر کنید")
@@ -172,7 +191,6 @@ async def main():
         logger.info("=" * 50)
         logger.info("🤖 ربات اسکنر ترند تلگرام فعال شد")
         logger.info(f"⏱ بازه زمانی اسکن: هر {config['LOOP_INTERVAL_SECONDS']} ثانیه")
-        # لاگ اعلان ادمین حذف شد چون اکنون همیشه فعال است
         logger.info("=" * 50)
         await notify_admin(client, "🤖 **ربات اسکنر ترند فعال شد**", config)
         

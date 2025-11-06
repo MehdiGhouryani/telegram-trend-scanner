@@ -1,6 +1,8 @@
 """
-ماژول غنی‌سازی داده‌ها با Failover بین Birdeye و Dexscreener،
-در صورت عدم نتیجه: رشته خالی بجای ارور، با لاگ فشرده.
+ماژول غنی‌سازی داده‌ها با Failover و تلاش مجدد هوشمند.
+- Birdeye: تلاش مجدد برای خطاهای 429 و 5xx (مانند 521)
+- Dexscreener: تلاش مجدد فقط برای 429
+- لاگ‌نویسی هوشمند با ثبت پاسخ خطا از سرور.
 """
 
 import httpx
@@ -11,21 +13,38 @@ from httpx import ReadTimeout, ConnectError
 
 logger = logging.getLogger(__name__)
 
+# --- تنظیمات API ---
 BIRDEYE_API = os.getenv("EXTERNAL_API_ENDPOINT")
 BIRDEYE_KEY = os.getenv("EXTERNAL_API_KEY")
-
 DEX_API = os.getenv("DEX_API_ENDPOINT")
 DEX_KEY = os.getenv("DEX_API_KEY")
 
+# --- تنظیمات تلاش مجدد ---
 REQUEST_TIMEOUT = 15
 MAX_RETRIES = 2
-SLEEP_RATE = 0.5
+SLEEP_RATE = 0.5  # تاخیر بین فراخوانی‌های gather در enrich_top_lists
+
+# کدهای وضعیتی که برای Birdeye منجر به تلاش مجدد می‌شوند (خطای سرور یا ریت لیمیت)
+BIRDEYE_RETRY_STATUS_CODES = [429, 500, 502, 503, 504, 521]
+BIRDEYE_RETRY_SLEEP_SECONDS = 3
+
+
+def _get_response_snippet(response_text: str, length: int = 150) -> str:
+    """یک قطعه فشرده و ایمن از متن پاسخ برای لاگ‌نویسی برمی‌گرداند."""
+    if not response_text:
+        return "[No Response Body]"
+    return (response_text[:length].replace("\n", " ") + "...")
+
 
 async def _query_birdeye(symbol, network, client):
-    """تماس با Birdeye API با Retry Logic"""
+    """تماس با Birdeye API با Retry Logic هوشمند برای 5xx و 429"""
     params = {"symbol": symbol, "chain": network}
     headers = {"Authorization": f"Bearer {BIRDEYE_KEY}"} if BIRDEYE_KEY else {}
     
+    if not BIRDEYE_API:
+        logger.error("BIRDEYE_API (EXTERNAL_API_ENDPOINT) در .env تنظیم نشده است.")
+        return None
+
     try:
         for attempt in range(MAX_RETRIES):
             r = await client.get(
@@ -52,10 +71,23 @@ async def _query_birdeye(symbol, network, client):
                 logger.debug(f"BIRDEYE NotFound: {symbol}-{network}")
                 return None
             
-            elif r.status_code == 429:
-                await asyncio.sleep(1)
+            # منطق تلاش مجدد هوشمند (فقط Birdeye)
+            elif r.status_code in BIRDEYE_RETRY_STATUS_CODES:
+                snippet = _get_response_snippet(r.text)
+                logger.warning(
+                    f"BIRDEYE HTTP {r.status_code} (Retry {attempt+1}): "
+                    f"{symbol}-{network} | Resp: {snippet} | "
+                    f"Waiting {BIRDEYE_RETRY_SLEEP_SECONDS}s..."
+                )
+                await asyncio.sleep(BIRDEYE_RETRY_SLEEP_SECONDS)
+            
+            # خطاهای دیگر (مانند 400, 401, 404) که نباید دوباره تلاش شوند
             else:
-                logger.warning(f"BIRDEYE HTTP {r.status_code}: {symbol}-{network}")
+                snippet = _get_response_snippet(r.text)
+                logger.warning(
+                    f"BIRDEYE HTTP {r.status_code} (No Retry): "
+                    f"{symbol}-{network} | Resp: {snippet}"
+                )
                 break 
                 
     except (ReadTimeout, ConnectError) as e:
@@ -66,10 +98,14 @@ async def _query_birdeye(symbol, network, client):
     return None
 
 async def _query_dexscreener(symbol, network, client):
-    """تماس با Dexscreener API با Retry Logic"""
+    """تماس با Dexscreener API با Retry Logic فقط برای 429"""
     params = {"symbol": symbol, "chain": network}
     headers = {"Authorization": f"Bearer {DEX_KEY}"} if DEX_KEY else {}
     
+    if not DEX_API:
+        logger.error("DEX_API (DEX_API_ENDPOINT) در .env تنظیم نشده است.")
+        return None
+
     try:
         for attempt in range(MAX_RETRIES):
             r = await client.get(
@@ -96,10 +132,22 @@ async def _query_dexscreener(symbol, network, client):
                 logger.debug(f"DEXSCREEN NotFound: {symbol}-{network}")
                 return None
 
+            # منطق تلاش مجدد (فقط Dexscreener)
             elif r.status_code == 429:
+                snippet = _get_response_snippet(r.text)
+                logger.warning(
+                    f"DEXSCREEN HTTP 429 (Retry {attempt+1}): "
+                    f"{symbol}-{network} | Resp: {snippet} | Waiting 1s..."
+                )
                 await asyncio.sleep(1)
+            
+            # خطاهای دیگر (404، 5xx و ...)
             else:
-                logger.warning(f"DEXSCREEN HTTP {r.status_code}: {symbol}-{network}")
+                snippet = _get_response_snippet(r.text)
+                logger.warning(
+                    f"DEXSCREEN HTTP {r.status_code} (No Retry): "
+                    f"{symbol}-{network} | Resp: {snippet}"
+                )
                 break
                 
     except (ReadTimeout, ConnectError) as e:
@@ -119,18 +167,22 @@ async def get_contract_address(symbol: str, network: str, http_client: httpx.Asy
     if addr:
         return addr
     
+    # اگر Birdeye نشد (به هر دلیلی)، سراغ Dexscreener می‌رویم
+    logger.debug(f"Birdeye failed for {symbol}-{network}, trying Dexscreener...")
+    
     addr = await _query_dexscreener(symbol_clean, network_query, http_client)
     if addr:
         return addr
     
-    logger.debug(f"FAIL: {symbol}-{network} NO ADDRESS")
+    logger.debug(f"FAIL: {symbol}-{network} NO ADDRESS (tried both APIs)")
     return ""
 
 async def enrich_top_lists(top_sol: list, top_bnb: list) -> tuple[list, list]:
-    """لیست‌های تاپ ۵ را با آدرس قرارداد غنی‌سازی می‌کند"""
+    """لیست‌های تاپ ۵ را با آدرس قرارداد غنی‌سازی می‌کند (با استفاده از asyncio.gather)"""
     async with httpx.AsyncClient() as client:
         enriched_sol, enriched_bnb = [], []
         
+        # --- پردازش SOL ---
         tasks_sol = []
         for symbol, count in top_sol:
             tasks_sol.append(get_contract_address(symbol, 'SOL', client))
@@ -141,8 +193,9 @@ async def enrich_top_lists(top_sol: list, top_bnb: list) -> tuple[list, list]:
             for i, addr in enumerate(results_sol)
         ]
         
-        await asyncio.sleep(SLEEP_RATE) 
+        await asyncio.sleep(SLEEP_RATE)  # تاخیر کوتاه بین دسته‌های SOL و BNB
         
+        # --- پردازش BNB ---
         tasks_bnb = []
         for symbol, count in top_bnb:
             tasks_bnb.append(get_contract_address(symbol, 'BNB', client))
@@ -153,5 +206,5 @@ async def enrich_top_lists(top_sol: list, top_bnb: list) -> tuple[list, list]:
             for i, addr in enumerate(results_bnb)
         ]
 
-        logger.info(f"Enrich: {len(enriched_sol)} SOL, {len(enriched_bnb)} BNB done")
+        logger.info(f"Enrich: {len(results_sol)} SOL, {len(results_bnb)} BNB tasks done")
         return enriched_sol, enriched_bnb
