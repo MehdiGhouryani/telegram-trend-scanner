@@ -8,7 +8,7 @@ import sys
 import asyncio
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, ChannelPrivateError
 from dotenv import load_dotenv
@@ -92,10 +92,13 @@ async def notify_admin(client, message, config):
     except Exception as e:
         logger.warning(f"Failed to send admin notification: {e}")
 
+
+
 async def process_trends(client, config):
     """پردازش اصلی: دریافت، تحلیل و انتشار ترندها"""
     try:
-        now = datetime.utcnow()
+        # رفع خطا: استفاده از زمان آگاه از منطقه زمانی (Timezone-Aware)
+        now = datetime.now(UTC)
         since = now - timedelta(seconds=config['LOOP_INTERVAL_SECONDS'])
         
         logger.info(f"→ شروع اسکن پیام‌ها از {since.strftime('%H:%M:%S')}")
@@ -106,6 +109,7 @@ async def process_trends(client, config):
             config['SOURCE_CHANNEL_ID'],
             limit=200
         ):
+            # اکنون مقایسه به درستی انجام می‌شود
             if msg.date < since:
                 break
             if msg.date >= since and getattr(msg, "text", None):
@@ -162,6 +166,7 @@ async def process_trends(client, config):
     except Exception as e:
         logger.error(f"✗ خطای غیرمنتظره: {e}", exc_info=True)
         await notify_admin(client, f"🆘 خطای غیرمنتظره:\n`{str(e)}`", config)
+
 
 async def main():
     """حلقه اصلی برنامه"""

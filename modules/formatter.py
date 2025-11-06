@@ -11,7 +11,8 @@ def format_output_message(enriched_sol: list, enriched_bnb: list) -> str:
     خروجی: پیام تلگرام (markdown). اگر آدرس نبود، فقط یک خط فاصله زیر توکن/تکرار.
     """
     lines = []
-    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+    # رفع خطا: استفاده از زمان آگاه از منطقه زمانی (Timezone-Aware)
+    timestamp = datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')
     any_data = False
 
     if enriched_sol:
