@@ -52,6 +52,8 @@ def setup_logging():
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
+
+
 def load_config():
     """بارگذاری و اعتبارسنجی تنظیمات از .env"""
     try:
@@ -59,25 +61,27 @@ def load_config():
             'API_ID': int(os.getenv("API_ID")),
             'API_HASH': os.getenv("API_HASH"),
             'SESSION_NAME': os.getenv("SESSION_NAME", "trend_scanner"),
-            'SOURCE_CHANNEL_ID': os.getenv("SOURCE_CHANNEL_ID"),
-            'DEST_CHANNEL_ID': os.getenv("DESTINATION_CHANNEL_ID"),
+            
+            # رفع خطا: آیدی‌های کانال باید به عنوان عدد (Integer) خوانده شوند
+            'SOURCE_CHANNEL_ID': int(os.getenv("SOURCE_CHANNEL_ID")),
+            'DEST_CHANNEL_ID': int(os.getenv("DESTINATION_CHANNEL_ID")),
+            
             'LOOP_INTERVAL_SECONDS': int(os.getenv("LOOP_INTERVAL_SECONDS", 1800)),
             'ADMIN_NOTIFICATIONS': os.getenv("ADMIN_NOTIFICATIONS", "false").lower() == "true"
         }
         
+        # API_HASH چون رشته است، باید جداگانه بررسی شود
         if not config['API_HASH']:
             raise ValueError("API_HASH خالی است")
-        if not config['SOURCE_CHANNEL_ID']:
-            raise ValueError("SOURCE_CHANNEL_ID خالی است")
-        if not config['DEST_CHANNEL_ID']:
-            raise ValueError("DESTINATION_CHANNEL_ID خالی است")
         
         logger.info("✓ تنظیمات با موفقیت بارگذاری شد")
         return config
     
     except (ValueError, TypeError) as e:
         logger.error(f"✗ خطا در بارگذاری تنظیمات: {e}")
+        logger.error("!!! لطفاً مطمئن شوید API_ID, API_HASH, و ID کانال‌ها به درستی در فایل .env وارد شده‌اند.")
         exit(1)
+
 
 async def notify_admin(client, message, config):
     """ارسال پیام وضعیت به ادمین (Saved Messages)"""
